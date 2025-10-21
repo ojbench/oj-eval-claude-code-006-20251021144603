@@ -127,6 +127,7 @@ void VisitBlock(int r, int c) {
 
   // If visiting a mine, game over
   if (is_mine[r][c]) {
+    is_visited[r][c] = true;
     game_state = -1;
     return;
   }
