@@ -3,12 +3,30 @@
 
 #include <iostream>
 #include <utility>
+#include <vector>
+#include <queue>
+#include <set>
+#include <algorithm>
+#include <random>
 
 extern int rows;         // The count of rows of the game map.
 extern int columns;      // The count of columns of the game map.
 extern int total_mines;  // The count of mines of the game map.
 
 // You MUST NOT use any other external variables except for rows, columns and total_mines.
+
+// AI game state
+enum CellState {
+  UNKNOWN = 0,
+  SAFE = 1,
+  MINE = 2,
+  VISITED = 3
+};
+
+std::vector<std::vector<CellState>> cell_states;
+std::vector<std::vector<int>> cell_numbers;
+std::vector<std::pair<int, int>> frontier_cells;
+std::mt19937 rng(12345);  // Fixed seed for reproducibility
 
 /**
  * @brief The definition of function Execute(int, int, bool)
@@ -34,7 +52,12 @@ void Execute(int r, int c, int type);
  * will read the scale of the game map and the first step taken by the server (see README).
  */
 void InitGame() {
-  // TODO (student): Initialize all your global variables!
+  // Initialize AI state
+  cell_states.assign(rows, std::vector<CellState>(columns, UNKNOWN));
+  cell_numbers.assign(rows, std::vector<int>(columns, -1));
+  frontier_cells.clear();
+
+  // Read first move coordinates and execute
   int first_row, first_column;
   std::cin >> first_row >> first_column;
   Execute(first_row, first_column, 0);
@@ -51,7 +74,34 @@ void InitGame() {
  *     01?
  */
 void ReadMap() {
-  // TODO (student): Implement me!
+  frontier_cells.clear();
+
+  for (int i = 0; i < rows; i++) {
+    for (int j = 0; j < columns; j++) {
+      char cell;
+      std::cin >> cell;
+
+      if (cell >= '0' && cell <= '8') {
+        // Visited numbered cell
+        cell_numbers[i][j] = cell - '0';
+        cell_states[i][j] = VISITED;
+        frontier_cells.push_back({i, j});
+      } else if (cell == 'X') {
+        // Visited mine (game over scenario)
+        cell_states[i][j] = MINE;
+      } else if (cell == '@') {
+        // Marked mine
+        cell_states[i][j] = MINE;
+      } else {
+        // Unknown cell ('?')
+        if (cell_states[i][j] == VISITED) {
+          // This was previously visited but now shows as '?'
+          // This happens in victory state where mines are revealed
+          cell_states[i][j] = UNKNOWN;
+        }
+      }
+    }
+  }
 }
 
 /**
@@ -60,11 +110,193 @@ void ReadMap() {
  * @details This function is designed to decide the next step when playing the client's (or player's) role. Open up your
  * mind and make your decision here! Caution: you can only execute once in this function.
  */
+// Helper function to count unknown neighbors around a cell
+int countUnknownNeighbors(int r, int c) {
+  int count = 0;
+  for (int dr = -1; dr <= 1; dr++) {
+    for (int dc = -1; dc <= 1; dc++) {
+      if (dr == 0 && dc == 0) continue;
+      int nr = r + dr, nc = c + dc;
+      if (nr >= 0 && nr < rows && nc >= 0 && nc < columns) {
+        if (cell_states[nr][nc] == UNKNOWN) count++;
+      }
+    }
+  }
+  return count;
+}
+
+// Helper function to count marked mine neighbors around a cell
+int countMineNeighbors(int r, int c) {
+  int count = 0;
+  for (int dr = -1; dr <= 1; dr++) {
+    for (int dc = -1; dc <= 1; dc++) {
+      if (dr == 0 && dc == 0) continue;
+      int nr = r + dr, nc = c + dc;
+      if (nr >= 0 && nr < rows && nc >= 0 && nc < columns) {
+        if (cell_states[nr][nc] == MINE) count++;
+      }
+    }
+  }
+  return count;
+}
+
+// Helper function to get unknown neighbor coordinates
+std::vector<std::pair<int, int>> getUnknownNeighbors(int r, int c) {
+  std::vector<std::pair<int, int>> neighbors;
+  for (int dr = -1; dr <= 1; dr++) {
+    for (int dc = -1; dc <= 1; dc++) {
+      if (dr == 0 && dc == 0) continue;
+      int nr = r + dr, nc = c + dc;
+      if (nr >= 0 && nr < rows && nc >= 0 && nc < columns) {
+        if (cell_states[nr][nc] == UNKNOWN) {
+          neighbors.push_back({nr, nc});
+        }
+      }
+    }
+  }
+  return neighbors;
+}
+
 void Decide() {
-  // TODO (student): Implement me!
-  // while (true) {
-  //   Execute(0, 0);
-  // }
+  // Step 1: Apply basic logical rules
+
+  // Find obvious mines and safe cells using basic deduction
+  std::set<std::pair<int, int>> obvious_mines;
+  std::set<std::pair<int, int>> obvious_safe;
+
+  for (auto [r, c] : frontier_cells) {
+    int unknown_count = countUnknownNeighbors(r, c);
+    int mine_count = countMineNeighbors(r, c);
+
+    // If remaining unknown cells equal remaining mines, all are mines
+    if (cell_numbers[r][c] - mine_count == unknown_count && unknown_count > 0) {
+      auto neighbors = getUnknownNeighbors(r, c);
+      for (auto [nr, nc] : neighbors) {
+        obvious_mines.insert({nr, nc});
+      }
+    }
+
+    // If all mines are already found, remaining unknown cells are safe
+    if (cell_numbers[r][c] == mine_count && unknown_count > 0) {
+      auto neighbors = getUnknownNeighbors(r, c);
+      for (auto [nr, nc] : neighbors) {
+        obvious_safe.insert({nr, nc});
+      }
+    }
+  }
+
+  // Step 2: Try auto-explore if possible
+  for (auto [r, c] : frontier_cells) {
+    int mine_count = countMineNeighbors(r, c);
+    if (cell_numbers[r][c] == mine_count) {
+      Execute(r, c, 2);  // Auto explore
+      return;
+    }
+  }
+
+  // Step 3: Mark obvious mines
+  if (!obvious_mines.empty()) {
+    auto [r, c] = *obvious_mines.begin();
+    Execute(r, c, 1);  // Mark mine
+    return;
+  }
+
+  // Step 4: Visit obvious safe cells
+  if (!obvious_safe.empty()) {
+    auto [r, c] = *obvious_safe.begin();
+    Execute(r, c, 0);  // Visit
+    return;
+  }
+
+  // Step 5: If no obvious moves, use probability-based strategy
+  // Find all unknown cells adjacent to frontier
+  std::vector<std::pair<int, int>> candidate_cells;
+  for (auto [r, c] : frontier_cells) {
+    auto neighbors = getUnknownNeighbors(r, c);
+    for (auto neighbor : neighbors) {
+      candidate_cells.push_back(neighbor);
+    }
+  }
+
+  // Remove duplicates
+  std::sort(candidate_cells.begin(), candidate_cells.end());
+  candidate_cells.erase(std::unique(candidate_cells.begin(), candidate_cells.end()), candidate_cells.end());
+
+  if (!candidate_cells.empty()) {
+    // Calculate basic probability for each candidate
+    std::pair<int, int> best_cell = candidate_cells[0];
+    double best_prob = 0.5;  // Default probability
+
+    for (auto [r, c] : candidate_cells) {
+      double mine_prob = 0.5;  // Default to 50%
+      int total_threats = 0;
+      int confirmed_threats = 0;
+
+      // Calculate probability based on neighboring numbered cells
+      for (int dr = -1; dr <= 1; dr++) {
+        for (int dc = -1; dc <= 1; dc++) {
+          if (dr == 0 && dc == 0) continue;
+          int nr = r + dr, nc = c + dc;
+          if (nr >= 0 && nr < rows && nc >= 0 && nc < columns && cell_states[nr][nc] == VISITED) {
+            int unknown = countUnknownNeighbors(nr, nc);
+            int mines = countMineNeighbors(nr, nc);
+            total_threats++;
+            if (unknown > 0) {
+              double local_prob = double(cell_numbers[nr][nc] - mines) / unknown;
+              mine_prob = std::max(mine_prob, local_prob);
+              if (cell_numbers[nr][nc] - mines > 0) confirmed_threats++;
+            }
+          }
+        }
+      }
+
+      // Prefer cells with lower mine probability and more confirmed threats
+      double score = mine_prob * 0.7 - (confirmed_threats * 0.3);
+      if (score < best_prob) {
+        best_prob = score;
+        best_cell = {r, c};
+      }
+    }
+
+    Execute(best_cell.first, best_cell.second, 0);  // Visit best candidate
+    return;
+  }
+
+  // Step 6: If still no good candidates, pick a random unknown cell
+  std::vector<std::pair<int, int>> all_unknown;
+  for (int i = 0; i < rows; i++) {
+    for (int j = 0; j < columns; j++) {
+      if (cell_states[i][j] == UNKNOWN) {
+        all_unknown.push_back({i, j});
+      }
+    }
+  }
+
+  if (!all_unknown.empty()) {
+    // Prefer cells near edges and corners as they have fewer neighbors
+    std::sort(all_unknown.begin(), all_unknown.end(), [](auto a, auto b) {
+      int neighbors_a = 8;
+      int neighbors_b = 8;
+
+      // Count actual neighbors for each cell
+      for (int dr = -1; dr <= 1; dr++) {
+        for (int dc = -1; dc <= 1; dc++) {
+          if (dr == 0 && dc == 0) continue;
+          if (a.first + dr < 0 || a.first + dr >= rows || a.second + dc < 0 || a.second + dc >= columns) {
+            neighbors_a--;
+          }
+          if (b.first + dr < 0 || b.first + dr >= rows || b.second + dc < 0 || b.second + dc >= columns) {
+            neighbors_b--;
+          }
+        }
+      }
+
+      return neighbors_a < neighbors_b;
+    });
+
+    auto [r, c] = all_unknown[0];
+    Execute(r, c, 0);  // Visit
+  }
 }
 
 #endif
