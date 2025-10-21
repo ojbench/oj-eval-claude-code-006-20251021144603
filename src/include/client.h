@@ -158,40 +158,27 @@ std::vector<std::pair<int, int>> getUnknownNeighbors(int r, int c) {
 }
 
 void Decide() {
-  // Step 1: Try auto-explore first
-  for (auto [r, c] : frontier_cells) {
-    int mine_count = countMineNeighbors(r, c);
+  // Try auto-explore first
+  for (size_t i = 0; i < frontier_cells.size(); i++) {
+    int r = frontier_cells[i].first;
+    int c = frontier_cells[i].second;
+    int mine_count = 0;
+    for (int dr = -1; dr <= 1; dr++) {
+      for (int dc = -1; dc <= 1; dc++) {
+        if (dr == 0 && dc == 0) continue;
+        int nr = r + dr, nc = c + dc;
+        if (nr >= 0 && nr < rows && nc >= 0 && nc < columns && cell_states[nr][nc] == MINE) {
+          mine_count++;
+        }
+      }
+    }
     if (cell_numbers[r][c] == mine_count) {
       Execute(r, c, 2);  // Auto explore
       return;
     }
   }
 
-  // Step 2: Find one obvious mine or safe cell
-  for (auto [r, c] : frontier_cells) {
-    int unknown_count = countUnknownNeighbors(r, c);
-    int mine_count = countMineNeighbors(r, c);
-
-    // If all mines are found, all remaining unknown cells are safe
-    if (cell_numbers[r][c] == mine_count && unknown_count > 0) {
-      auto neighbors = getUnknownNeighbors(r, c);
-      if (!neighbors.empty()) {
-        Execute(neighbors[0].first, neighbors[0].second, 0);  // Visit safe cell
-        return;
-      }
-    }
-
-    // If remaining unknown cells equal remaining mines, all are mines
-    if (cell_numbers[r][c] - mine_count == unknown_count && unknown_count > 0) {
-      auto neighbors = getUnknownNeighbors(r, c);
-      if (!neighbors.empty()) {
-        Execute(neighbors[0].first, neighbors[0].second, 1);  // Mark mine
-        return;
-      }
-    }
-  }
-
-  // Step 3: Pick the first unknown cell (very simple fallback)
+  // Find first unknown cell
   for (int i = 0; i < rows; i++) {
     for (int j = 0; j < columns; j++) {
       if (cell_states[i][j] == UNKNOWN) {
